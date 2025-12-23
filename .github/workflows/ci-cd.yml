@@ -116,7 +116,7 @@ jobs:
     
     environment:
       name: production
-      url: url:http://localhost
+      url: http://localhost
 
     
     steps:
