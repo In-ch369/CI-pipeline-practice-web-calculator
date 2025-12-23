@@ -602,57 +602,31 @@ jobs:
     if: always()
     
     steps:
-    - name: Determine deployment status
-      id: deployment-status
-      run: |
-        if ${{ needs.deploy.result == 'success' }}; then
-          echo "STATUS=success" >> $GITHUB_OUTPUT
-          echo "EMOJI=✅" >> $GITHUB_OUTPUT
-          echo "MESSAGE=CI/CD Pipeline completed successfully!" >> $GITHUB_OUTPUT
-        elif ${{ needs.deploy.result == 'failure' }}; then
-          echo "STATUS=failure" >> $GITHUB_OUTPUT
-          echo "EMOJI=❌" >> $GITHUB_OUTPUT
-          echo "MESSAGE=CI/CD Pipeline failed during deployment!" >> $GITHUB_OUTPUT
-        elif ${{ needs.build.result == 'failure' }}; then
-          echo "STATUS=failure" >> $GITHUB_OUTPUT
-          echo "EMOJI=🚨" >> $GITHUB_OUTPUT
-          echo "MESSAGE=CI/CD Pipeline failed during build!" >> $GITHUB_OUTPUT
-        elif ${{ needs.test.result == 'failure' }}; then
-          echo "STATUS=failure" >> $GITHUB_OUTPUT
-          echo "EMOJI=⚠️" >> $GITHUB_OUTPUT
-          echo "MESSAGE=CI/CD Pipeline failed during tests!" >> $GITHUB_OUTPUT
-        elif ${{ failure() }}; then
-          echo "STATUS=failure" >> $GITHUB_OUTPUT
-          echo "EMOJI=💥" >> $GITHUB_OUTPUT
-          echo "MESSAGE=CI/CD Pipeline failed!" >> $GITHUB_OUTPUT
-        else
-          echo "STATUS=success" >> $GITHUB_OUTPUT
-          echo "EMOJI=✅" >> $GITHUB_OUTPUT
-          echo "MESSAGE=CI/CD Pipeline completed!" >> $GITHUB_OUTPUT
-        fi
-    
     - name: Send success notification
-      if: steps.deployment-status.outputs.STATUS == 'success'
+      if: success()
       run: |
-        echo "${{ steps.deployment-status.outputs.EMOJI }} ${{ steps.deployment-status.outputs.MESSAGE }}"
-        echo "📊 Test Results:"
+        echo "✅ CI/CD Pipeline completed successfully!"
+        echo ""
+        echo "📊 Summary:"
         echo "   - Branch: ${{ github.ref_name }}"
         echo "   - Commit: ${{ github.sha }}"
         echo "   - Actor: ${{ github.actor }}"
         echo "   - Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         echo ""
-        echo "🌐 Deployment Details:"
+        echo "🚀 Deployment Details:"
         echo "   - URL: http://${{ secrets.VM_HOST || 'VM_IP_NOT_SET' }}"
         echo "   - Image: ${{ env.IMAGE_FULL_NAME }}"
         echo "   - Tag: ${{ env.DEPLOY_TAG || 'N/A' }}"
+        echo "   - Timestamp: $(date)"
         echo ""
-        echo "📋 Rollback Instructions:"
-        echo "   SSH to VM and run: /opt/web-calculator/rollback.sh"
+        echo "🔄 Rollback Instructions:"
+        echo "   To rollback, SSH to the VM and run:"
+        echo "   cd /opt/web-calculator && ./rollback.sh"
     
     - name: Send failure notification
-      if: steps.deployment-status.outputs.STATUS == 'failure'
+      if: failure()
       run: |
-        echo "${{ steps.deployment-status.outputs.EMOJI }} ${{ steps.deployment-status.outputs.MESSAGE }}"
+        echo "❌ CI/CD Pipeline failed!"
         echo ""
         echo "🔍 Debug Information:"
         echo "   - Workflow: ${{ github.workflow }}"
@@ -660,18 +634,28 @@ jobs:
         echo "   - Run URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         echo "   - Commit: ${{ github.sha }}"
         echo "   - Branch: ${{ github.ref_name }}"
+        echo "   - Actor: ${{ github.actor }}"
+        echo "   - Event: ${{ github.event_name }}"
         echo ""
-        echo "⚠️ Failed Jobs:"
-        {{#each needs}}
-        {{#if (eq this.result 'failure')}}
-        echo "   - {{this.name}}"
-        {{/if}}
-        {{/each}}
+        echo "📋 Job Status:"
+        echo "   - Test Job: ${{ needs.test.result }}"
+        echo "   - Build Job: ${{ needs.build.result }}"
+        echo "   - Deploy Job: ${{ needs.deploy.result }}"
         echo ""
-        echo "🚀 Manual Rollback (if deployment failed):"
-        echo "   ssh ${{ secrets.VM_USER || 'ubuntu' }}@${{ secrets.VM_HOST }}"
-        echo "   cd /opt/web-calculator"
-        echo "   ./rollback.sh"
-        
-        # 退出失败状态
-        exit 1
+        echo "🚑 Recovery Actions:"
+        if [[ "${{ needs.deploy.result }}" == "failure" ]]; then
+          echo "   1. Check VM connectivity:"
+          echo "      ssh ${{ secrets.VM_USER || 'ubuntu' }}@${{ secrets.VM_HOST || 'VM_IP_NOT_SET' }}"
+          echo "   2. Manual rollback:"
+          echo "      cd /opt/web-calculator && ./rollback.sh"
+        fi
+        if [[ "${{ needs.build.result }}" == "failure" ]]; then
+          echo "   1. Check Docker image:"
+          echo "      https://github.com/${{ github.repository }}/packages"
+        fi
+        if [[ "${{ needs.test.result }}" == "failure" ]]; then
+          echo "   1. Check test logs in artifacts"
+          echo "   2. Run tests locally: python -m pytest tests/"
+        fi
+        echo ""
+        echo "⚠️ Check the workflow logs for detailed error information."
