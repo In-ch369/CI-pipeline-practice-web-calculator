@@ -1,0 +1,50 @@
+version: '3.9'
+
+services:
+  proxy:
+    image: nginx:alpine
+    container_name: webcalc_proxy
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    ports:
+      - "80:80"
+    networks:
+      - webcalc-network
+    depends_on:
+      - app_blue
+      - app_green
+    restart: unless-stopped
+
+  app_blue:
+    image: ghcr.io/${GITHUB_USERNAME}/web-calculator:${BLUE_TAG:-latest}
+    container_name: webcalc_blue
+    environment:
+      - FLASK_ENV=production
+    networks:
+      - webcalc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  app_green:
+    image: ghcr.io/${GITHUB_USERNAME}/web-calculator:${GREEN_TAG:-latest}
+    container_name: webcalc_green
+    environment:
+      - FLASK_ENV=production
+    networks:
+      - webcalc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+networks:
+  webcalc-network:
+    driver: bridge
