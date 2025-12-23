@@ -116,7 +116,8 @@ jobs:
     
     environment:
       name: production
-      url: http://${{ secrets.VM_HOST }}
+      url: url:http://localhost
+
     
     steps:
     - name: Checkout code
