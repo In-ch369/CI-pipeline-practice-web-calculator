@@ -226,18 +226,55 @@ jobs:
         chmod +x deploy.sh
     
     - name: Copy files to VM
+      timeout-minutes: 5
       env:
         VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
+        VM_USER: ${{ secrets.VM_USER || 'ubuntu' }}  # Ubuntu 默认用户通常是 'ubuntu'
       run: |
-        # 创建远程目录
-        sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "mkdir -p /opt/web-calculator/nginx/conf.d"
+        echo "Testing connection to $VM_USER@${{ secrets.VM_HOST }}..."
         
-        # 复制部署脚本
-        sshpass -p "$VM_PASSWORD" scp -o StrictHostKeyChecking=no deploy.sh ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:/tmp/deploy.sh
+        # 增加详细输出
+        set -x
         
-        # 复制配置文件
-        sshpass -p "$VM_PASSWORD" scp -o StrictHostKeyChecking=no docker-compose.yml ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:/opt/web-calculator/
-        sshpass -p "$VM_PASSWORD" scp -o StrictHostKeyChecking=no nginx/conf.d/default.conf ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:/opt/web-calculator/nginx/conf.d/
+        # 测试连接并显示详细信息
+        timeout 30s sshpass -p "$VM_PASSWORD" ssh -v \
+          -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=10 \
+          -o LogLevel=ERROR \
+          $VM_USER@${{ secrets.VM_HOST }} \
+          "echo 'SSH连接成功'; whoami; hostname; pwd"
+        
+        # 创建目录
+        sshpass -p "$VM_PASSWORD" ssh \
+          -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=10 \
+          $VM_USER@${{ secrets.VM_HOST }} \
+          "sudo mkdir -p /opt/web-calculator && sudo chown -R $VM_USER:$VM_USER /opt/web-calculator"
+        
+        # 复制文件
+        sshpass -p "$VM_PASSWORD" scp \
+          -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=10 \
+          deploy.sh $VM_USER@${{ secrets.VM_HOST }}:/tmp/deploy.sh
+        
+        sshpass -p "$VM_PASSWORD" scp \
+          -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=10 \
+          docker-compose.yml $VM_USER@${{ secrets.VM_HOST }}:/opt/web-calculator/
+        
+        # 复制 nginx 配置，确保目录存在
+        sshpass -p "$VM_PASSWORD" ssh \
+          -o StrictHostKeyChecking=no \
+          $VM_USER@${{ secrets.VM_HOST }} \
+          "mkdir -p /opt/web-calculator/nginx/conf.d"
+        
+        sshpass -p "$VM_PASSWORD" scp \
+          -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=10 \
+          nginx/conf.d/default.conf \
+          $VM_USER@${{ secrets.VM_HOST }}:/opt/web-calculator/nginx/conf.d/
+        
+        echo "文件复制完成"
     
     - name: Execute deployment
       env:
