@@ -64,7 +64,7 @@ jobs:
           coverage.xml
         retention-days: 7
 
-    build:
+  build:
     name: Build and Push Docker Image
     needs: test
     runs-on: ubuntu-latest
