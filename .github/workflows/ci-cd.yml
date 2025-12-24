@@ -1,4 +1,4 @@
-name: Web Calculator
+name: Web Calculator CI/CD
 
 on:
   push:
@@ -69,7 +69,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/'))
-    
+  
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -128,24 +128,23 @@ jobs:
     environment:
       name: production
       url: http://${{ secrets.VM_HOST }}
-    
+  
     steps:
     - name: Install sshpass
       run: |
         sudo apt-get update
         sudo apt-get install -y sshpass
-    
+  
     - name: Checkout code
       uses: actions/checkout@v4
-    
+  
     - name: Get build info
-      id: build-info
       run: |
         SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
         echo "DEPLOY_TAG=sha-$SHORT_SHA" >> $GITHUB_ENV
         echo "IMAGE_FULL=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-$SHORT_SHA" >> $GITHUB_ENV
         echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_ENV
-    
+  
     # 检查镜像是否存在
     - name: Check if image exists
       env:
@@ -169,16 +168,10 @@ jobs:
             # 获取仓库中的所有标签
             curl -s -H "Authorization: Bearer ${{ secrets.CR_PAT }}" \
               "https://ghcr.io/v2/${{ github.repository }}/tags/list" | jq .
-            
-            # 列出最近的镜像
-            echo "最近构建的镜像："
-            gh api /orgs/${{ github.repository_owner }}/packages/container/${{ github.event.repository.name }}/versions \
-              --jq '.[] | "\(.id) - \(.metadata.container.tags)"'
-              
             exit 1
           fi
         fi
-    
+  
     - name: Prepare deployment script
       run: |
         cat > /tmp/deploy_final.sh << 'DEPLOY_SCRIPT'
@@ -220,49 +213,9 @@ jobs:
         
         echo "✅ 登录成功"
         
-        # 3. 列出仓库中的可用标签
+        # 3. 拉取镜像
         echo ""
-        echo "=== 步骤3: 检查仓库中的镜像标签 ==="
-        echo "正在查询可用标签..."
-        
-        # 尝试获取可用标签
-        TAGS_RESPONSE=$(curl -s -H "Authorization: Bearer $GHCR_TOKEN" \
-          "https://ghcr.io/v2/$REPO_OWNER/$REPO_NAME/tags/list" 2>/dev/null || echo "{}")
-        
-        if echo "$TAGS_RESPONSE" | grep -q "tags"; then
-            echo "可用标签:"
-            echo "$TAGS_RESPONSE" | jq -r '.tags[]' | head -20
-            
-            # 检查我们的标签是否存在
-            if echo "$TAGS_RESPONSE" | grep -q "$DEPLOY_TAG"; then
-                echo "✅ 找到目标标签: $DEPLOY_TAG"
-            else
-                echo "❌ 未找到标签: $DEPLOY_TAG"
-                echo "尝试查找包含 $SHORT_SHA 的标签..."
-                
-                # 查找包含短SHA的标签
-                MATCHING_TAGS=$(echo "$TAGS_RESPONSE" | jq -r ".tags[] | select(contains(\"$SHORT_SHA\"))")
-                if [ -n "$MATCHING_TAGS" ]; then
-                    echo "找到相似标签:"
-                    echo "$MATCHING_TAGS"
-                    echo "使用第一个匹配的标签..."
-                    ALT_TAG=$(echo "$MATCHING_TAGS" | head -1)
-                    echo "改用标签: $ALT_TAG"
-                    DEPLOY_TAG="$ALT_TAG"
-                    IMAGE_FULL="ghcr.io/$REPO_OWNER/$REPO_NAME:$ALT_TAG"
-                else
-                    echo "尝试拉取 latest 标签..."
-                    DEPLOY_TAG="latest"
-                    IMAGE_FULL="ghcr.io/$REPO_OWNER/$REPO_NAME:latest"
-                fi
-            fi
-        else
-            echo "⚠️ 无法获取标签列表，继续尝试拉取"
-        fi
-        
-        # 4. 拉取镜像
-        echo ""
-        echo "=== 步骤4: 拉取镜像 ==="
+        echo "=== 步骤3: 拉取镜像 ==="
         echo "拉取: $IMAGE_FULL"
         
         # 尝试拉取，最多重试3次
@@ -273,10 +226,7 @@ jobs:
                 break
             else
                 if [ $i -eq 3 ]; then
-                    echo "❌ 镜像拉取失败"
-                    
-                    # 尝试拉取其他可能的标签
-                    echo "尝试拉取 latest 标签..."
+                    echo "❌ 镜像拉取失败，尝试拉取 latest 标签..."
                     docker pull "ghcr.io/$REPO_OWNER/$REPO_NAME:latest" && {
                         echo "✅ 成功拉取 latest 标签"
                         DEPLOY_TAG="latest"
@@ -291,23 +241,23 @@ jobs:
             fi
         done
         
-        # 5. 验证拉取的镜像
+        # 4. 验证拉取的镜像
         echo ""
-        echo "=== 步骤5: 验证镜像 ==="
+        echo "=== 步骤4: 验证镜像 ==="
         docker images | grep "$REPO_NAME" | head -5
         
-        # 6. 进入项目目录
+        # 5. 进入项目目录
         echo ""
-        echo "=== 步骤6: 进入项目目录 ==="
+        echo "=== 步骤5: 进入项目目录 ==="
         cd /opt/web-calculator
         
-        # 7. 蓝色绿色部署逻辑
+        # 6. 蓝色绿色部署逻辑
         echo ""
-        echo "=== 步骤7: 执行蓝色绿色部署 ==="
+        echo "=== 步骤6: 执行蓝色绿色部署 ==="
         
         # 确定当前活跃颜色
         if docker ps --format "table {{.Names}}" | grep -q "app_blue" && \
-          grep -q "app_blue.*max_fails" nginx/conf.d/default.conf 2>/dev/null; then
+           grep -q "app_blue.*max_fails" nginx/conf.d/default.conf 2>/dev/null; then
             CURRENT="blue"
             NEXT="green"
         else
@@ -318,9 +268,9 @@ jobs:
         echo "当前活跃: $CURRENT"
         echo "部署到: $NEXT"
         
-        # 8. 更新环境变量
+        # 7. 更新环境变量
         echo ""
-        echo "=== 步骤8: 更新环境变量 ==="
+        echo "=== 步骤7: 更新环境变量 ==="
         if [ "$NEXT" = "blue" ]; then
             cat > .env << EOF
         BLUE_TAG=$DEPLOY_TAG
@@ -340,19 +290,19 @@ jobs:
         echo "环境变量:"
         cat .env
         
-        # 9. 拉取指定服务的镜像
+        # 8. 拉取指定服务的镜像
         echo ""
-        echo "=== 步骤9: 拉取新版本 ==="
+        echo "=== 步骤8: 拉取新版本 ==="
         docker-compose pull "app_$NEXT"
         
-        # 10. 启动新服务
+        # 9. 启动新服务
         echo ""
-        echo "=== 步骤10: 启动新服务 ==="
+        echo "=== 步骤9: 启动新服务 ==="
         docker-compose up -d "app_$NEXT"
         
-        # 11. 健康检查
+        # 10. 健康检查
         echo ""
-        echo "=== 步骤11: 健康检查 ==="
+        echo "=== 步骤10: 健康检查 ==="
         for i in {1..30}; do
             if docker-compose ps "app_$NEXT" 2>/dev/null | grep -q "(healthy)"; then
                 echo "✅ 容器健康"
@@ -369,9 +319,9 @@ jobs:
             sleep 2
         done
         
-        # 12. 更新 Nginx 配置
+        # 11. 更新 Nginx 配置
         echo ""
-        echo "=== 步骤12: 更新 Nginx 配置 ==="
+        echo "=== 步骤11: 更新 Nginx 配置 ==="
         # 移除所有 max_fails 配置
         sed -i 's/ max_fails=[0-9]\+ fail_timeout=[0-9]\+s//g' nginx/conf.d/default.conf
         # 为新的活跃版本添加配置
@@ -380,19 +330,19 @@ jobs:
         echo "更新后的 Nginx 配置:"
         grep "server app_" nginx/conf.d/default.conf
         
-        # 13. 重新加载 Nginx
+        # 12. 重新加载 Nginx
         echo ""
-        echo "=== 步骤13: 重新加载 Nginx ==="
+        echo "=== 步骤12: 重新加载 Nginx ==="
         docker-compose exec -T proxy nginx -s reload
         
-        # 14. 停止旧容器
+        # 13. 停止旧容器
         echo ""
-        echo "=== 步骤14: 停止旧容器 ==="
+        echo "=== 步骤13: 停止旧容器 ==="
         docker-compose stop "app_$CURRENT"
         
-        # 15. 验证部署
+        # 14. 验证部署
         echo ""
-        echo "=== 步骤15: 验证部署 ==="
+        echo "=== 步骤14: 验证部署 ==="
         sleep 3
         
         echo "测试健康端点..."
@@ -417,9 +367,9 @@ jobs:
             exit 1
         fi
         
-        # 16. 清理旧镜像
+        # 15. 清理旧镜像
         echo ""
-        echo "=== 步骤16: 清理资源 ==="
+        echo "=== 步骤15: 清理资源 ==="
         echo "清理未使用的镜像..."
         docker image prune -af --filter "until=24h" || true
         
@@ -478,7 +428,66 @@ jobs:
             echo "❌ 部署失败"
             exit 1
         fi
-  
+    
+    - name: Create rollback script
+      if: always()
+      env:
+        VM_USER: ${{ secrets.VM_USER || 'ubuntu' }}
+        VM_HOST: ${{ secrets.VM_HOST }}
+        VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
+      run: |
+        cat > /tmp/rollback.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "🔄 开始回滚..."
+        
+        cd /opt/web-calculator
+        
+        # 检查当前活跃版本
+        if grep -q "app_blue.*max_fails" nginx/conf.d/default.conf; then
+            CURRENT="blue"
+            PREVIOUS="green"
+        else
+            CURRENT="green"
+            PREVIOUS="blue"
+        fi
+        
+        echo "当前: $CURRENT, 回滚到: $PREVIOUS"
+        
+        # 切换 Nginx 配置
+        sed -i 's/ max_fails=[0-9]\+ fail_timeout=[0-9]\+s//g' nginx/conf.d/default.conf
+        sed -i "s/server app_$PREVIOUS:5000;/server app_$PREVIOUS:5000 max_fails=1 fail_timeout=5s;/" nginx/conf.d/default.conf
+        
+        # 启动上一个版本
+        docker-compose start "app_$PREVIOUS"
+        
+        # 等待健康检查
+        sleep 5
+        
+        # 重新加载 Nginx
+        docker-compose exec -T proxy nginx -s reload
+        
+        # 停止当前版本
+        docker-compose stop "app_$CURRENT"
+        
+        echo "✅ 回滚完成到 $PREVIOUS 版本"
+        EOF
+        
+        chmod +x /tmp/rollback.sh
+        
+        # 上传回滚脚本
+        sshpass -p "$VM_PASSWORD" scp \
+          -o StrictHostKeyChecking=no \
+          /tmp/rollback.sh $VM_USER@$VM_HOST:/opt/web-calculator/rollback.sh
+        
+        sshpass -p "$VM_PASSWORD" ssh \
+          -o StrictHostKeyChecking=no \
+          $VM_USER@$VM_HOST \
+          "chmod +x /opt/web-calculator/rollback.sh"
+        
+        echo "🔄 回滚脚本已上传"
+
   notification:
     name: Send Notification
     needs: [test, build, deploy]
