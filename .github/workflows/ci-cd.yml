@@ -226,46 +226,47 @@ jobs:
         
         chmod +x deploy.sh
 
-    - name: Check network connectivity
-      run: |
-        echo "检查网络连通性..."
-        
-        # 测试ping
-        if ping -c 1 -W 5 "$VM_HOST" 2>/dev/null; then
-          echo "✓ Ping成功"
-        else
-          echo "✗ Ping失败"
-        fi
-        
-        # 测试端口
-        if nc -zv -w 5 "$VM_HOST" 22 2>/dev/null; then
-          echo "✓ 端口22可达"
-        else
-          echo "✗ 端口22不可达"
-        fi
-        
-        # 测试DNS
-        nslookup "$VM_HOST" 2>/dev/null || echo "DNS解析失败"
-    
-        - name: Test SSH connection to VM
+        - name: Check network connectivity
           env:
-            VM_USER: ${{ secrets.VM_USER || 'ubuntu' }}
             VM_HOST: ${{ secrets.VM_HOST }}
-            VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
           run: |
-            echo "Testing connection to $VM_USER@$VM_HOST..."
+            echo "检查网络连通性..."
             
-            # 简单的 SSH 连接测试
-            sshpass -p "$VM_PASSWORD" ssh \
-              -o StrictHostKeyChecking=no \
-              "$VM_USER@$VM_HOST" \
-              "echo 'SSH连接成功'"
-            
-            if [ $? -eq 0 ]; then
-              echo "SSH连接测试成功"
-            else
-              echo "SSH连接测试失败"
+            if [ -z "$VM_HOST" ]; then
+              echo "❌ VM_HOST 未设置"
               exit 1
+            fi
+            
+            echo "测试目标主机: $VM_HOST"
+            
+            # 测试ping（可选）
+            echo "测试ping..."
+            if ping -c 1 -W 2 "$VM_HOST" 2>/dev/null 1>/dev/null; then
+              echo "✓ Ping成功"
+            else
+              echo "⚠ Ping失败（可能禁用了ICMP）"
+            fi
+            
+            # 测试SSH端口
+            echo "测试SSH端口22..."
+            if timeout 5 bash -c "cat < /dev/null > /dev/tcp/$VM_HOST/22" 2>/dev/null; then
+              echo "✓ 端口22可达"
+            else
+              echo "✗ 端口22不可达"
+              echo "请检查："
+              echo "1. 服务器IP是否正确: $VM_HOST"
+              echo "2. 服务器是否运行SSH服务"
+              echo "3. 防火墙是否开放22端口"
+              echo "4. 安全组规则（如果是云服务器）"
+              exit 1
+            fi
+            
+            # 测试DNS（可选）
+            echo "测试DNS解析..."
+            if host "$VM_HOST" 2>/dev/null 1>/dev/null; then
+              echo "✓ DNS解析正常"
+            else
+              echo "⚠ DNS解析失败（如果是IP地址则正常）"
             fi
         
         # 创建目录
