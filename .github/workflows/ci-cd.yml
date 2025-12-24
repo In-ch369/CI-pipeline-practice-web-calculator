@@ -24,54 +24,15 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install pytest pytest-timeout  # 安装超时插件
     
-    - name: Run tests
+    - name: Run all tests with timeout
       run: |
-        python -m pytest tests/ -v
-
-  deploy:
-    name: Deploy to Server
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Deploy to Server via SSH
-      uses: appleboy/ssh-action@v0.1.5
-      with:
-        host: ${{ secrets.VM_HOST }}
-        username: ${{ secrets.VM_USER }}
-        key: ${{ secrets.VM_SSH_KEY }}
-        script: |
-          # 1. 进入项目目录
-          cd /opt/web-calculator || mkdir -p /opt/web-calculator && cd /opt/web-calculator
-          
-          # 2. 拉取最新代码
-          if [ -d .git ]; then
-            git pull origin main
-          else
-            git clone https://github.com/${{ github.repository }} .
-          fi
-          
-          # 3. 创建虚拟环境并安装依赖
-          python3 -m venv venv || true
-          source venv/bin/activate
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          
-          # 4. 重启应用（根据你的启动方式）
-          # 如果使用 systemd
-          sudo systemctl restart web-calculator || true
-          
-          # 或者直接启动
-          pkill -f "python app.py" || true
-          nohup python app.py > app.log 2>&1 &
-          
-          echo "✅ Deployment completed!"
-          
-          # 5. 验证部署
-          sleep 5
-          curl -f http://localhost:5000/health && echo "Health check passed" || echo "Health check failed"
+        # 设置更长的超时时间（120秒）
+        export PYTEST_TIMEOUT=120
+        
+        # 使用 pytest-timeout 插件
+        python -m pytest tests/ \
+          --timeout=120 \
+          -v \
+          --tb=short  # 简化错误回溯
