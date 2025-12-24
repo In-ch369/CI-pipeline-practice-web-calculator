@@ -94,7 +94,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
     
     steps:
-    - name: Deploy using SSH
+    - name: Deploy using SSH with keepalive
       env:
         VM_HOST: ${{ secrets.VM_HOST }}
         VM_USER: ${{ secrets.VM_USER }}
@@ -103,26 +103,82 @@ jobs:
         # 安装sshpass
         sudo apt-get install -y sshpass
         
-        # 登录到容器仓库
+        # 1. 先测试SSH连接
+        echo "测试SSH连接..."
         sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=30 \
+          -o ServerAliveInterval=60 \
+          -o ServerAliveCountMax=3 \
+          -o TCPKeepAlive=yes \
+          "$VM_USER@$VM_HOST" \
+          "echo 'SSH连接成功' && date"
+        
+        # 2. 单独执行每个命令，避免长连接
+        echo "登录到容器仓库..."
+        sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=30 \
           "$VM_USER@$VM_HOST" \
           "echo '${{ secrets.CR_PAT }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
         
-        # 拉取最新镜像
+        # 3. 拉取镜像（带超时和进度显示）
+        echo "开始拉取镜像..."
+        sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no \
+          -o ConnectTimeout=120 \
+          -o ServerAliveInterval=30 \
+          -o ServerAliveCountMax=10 \
+          "$VM_USER@$VM_HOST" \
+          "timeout 300 docker pull ghcr.io/${{ github.repository }}:latest 2>&1 | tee /tmp/docker_pull.log"
+        
+        # 4. 检查是否拉取成功
+        echo "检查镜像拉取状态..."
         sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no \
           "$VM_USER@$VM_HOST" \
-          "docker pull ghcr.io/${{ github.repository }}:latest"
+          "if docker images | grep -q '${{ github.repository }}'; then \
+            echo '✅ 镜像拉取成功'; \
+            cat /tmp/docker_pull.log | tail -5; \
+          else \
+            echo '❌ 镜像拉取失败'; \
+            cat /tmp/docker_pull.log; \
+            exit 1; \
+          fi"
         
-        # 重启容器
+        # 5. 重启容器
+        echo "重启容器..."
         sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no \
           "$VM_USER@$VM_HOST" \
           "cd /opt/web-calculator && docker-compose down && docker-compose up -d"
         
-        # 验证部署
-        sleep 5
+        # 6. 验证部署
         echo "验证部署..."
+        sleep 10
         if curl -s -f --max-time 10 "http://$VM_HOST/health" > /dev/null; then
           echo "✅ 部署成功"
         else
-          echo "⚠️  服务可能还在启动中"
+          echo "⚠️  验证中...再等待一下"
+          sleep 10
+          if curl -s -f --max-time 10 "http://$VM_HOST/health" > /dev/null; then
+            echo "✅ 部署成功"
+          else
+            echo "❌ 部署验证失败"
+            exit 1
+          fi
         fi
+
+  notification:
+    name: Send Notification
+    needs: [test, build, deploy]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Send success notification
+      if: success()
+      run: |
+        echo "✅ CI/CD Pipeline completed successfully!"
+        echo "Deployment URL: http://${{ secrets.VM_HOST }}"
+    
+    - name: Send failure notification
+      if: failure()
+      run: |
+        echo "❌ CI/CD Pipeline failed!"
+        echo "Check GitHub Actions logs for details."
