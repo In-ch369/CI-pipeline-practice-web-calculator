@@ -3,14 +3,10 @@ name: Web Calculator CI/CD
 on:
   push:
     branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  BLUE_PORT: 5001
-  GREEN_PORT: 5002
 
 jobs:
   test:
@@ -28,53 +24,44 @@ jobs:
     - name: Install dependencies
       run: |
         pip install -r requirements.txt
-        pip install pytest requests pytest-cov
+        pip install pytest requests
     
     - name: Run unit tests
       run: |
-        python -m pytest tests/unit_tests/ -v --cov=app --cov-report=xml
+        python -m pytest tests/unit_tests/ -v
     
-    - name: Run functional tests
+    - name: Run functional tests (with longer timeout)
       run: |
+        # 启动应用并记录日志
         echo "启动应用..."
-        # 设置FLASK环境变量
-        export FLASK_RUN_HOST=0.0.0.0
-        export FLASK_RUN_PORT=5000
         python app.py > app.log 2>&1 &
         APP_PID=$!
         
-        echo "等待应用启动(10秒)..."
-        sleep 10
+        echo "等待应用启动..."
+        # 等待更长时间
+        sleep 15
         
-        # 检查应用状态
-        if ! ps -p $APP_PID > /dev/null; then
-          echo "❌ 应用进程已退出"
-          echo "=== 应用日志 ==="
+        # 检查应用是否运行
+        if ps -p $APP_PID > /dev/null; then
+          echo "应用进程运行中"
+        else
+          echo "应用进程已退出"
           cat app.log
           exit 1
         fi
         
-        # 多次尝试连接
+        # 尝试连接
         echo "测试连接..."
-        for i in {1..5}; do
-          if curl -s -f --max-time 5 http://localhost:5000/health > /dev/null; then
-            echo "✅ 应用已就绪"
-            break
-          fi
-          echo "尝试 $i/5..."
-          sleep 3
-        done
-        
-        # 验证应用状态
-        if ! curl -s -f http://localhost:5000/health > /dev/null; then
+        if curl -s -f --max-time 5 http://localhost:5000/health > /dev/null; then
+          echo "✅ 应用已就绪"
+          # 运行测试
+          python -m pytest tests/functional_tests/ -v --tb=short
+        else
           echo "❌ 应用未响应"
           echo "=== 应用日志 ==="
           tail -50 app.log
           exit 1
         fi
-        
-        echo "运行功能测试..."
-        python -m pytest tests/functional_tests/ -v --tb=short
         
         # 清理
         kill $APP_PID 2>/dev/null || true
@@ -95,29 +82,10 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.CR_PAT }}
     
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=sha,prefix=
-          type=ref,event=branch
-          type=raw,value=latest
-    
     - name: Build and push
       run: |
-        # 构建带commit hash标签的镜像
-        SHORT_SHA=${GITHUB_SHA:0:7}
-        docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$SHORT_SHA .
-        docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest .
-        
-        # 推送两个标签
-        docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$SHORT_SHA
-        docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-        
-        # 设置输出供后续步骤使用
-        echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_ENV
+        docker build -t ghcr.io/${{ github.repository }}:latest .
+        docker push ghcr.io/${{ github.repository }}:latest
 
   deploy:
     name: Deploy to VM
@@ -126,11 +94,14 @@ jobs:
     if: github.ref == 'refs/heads/main'
     
     steps:
-    - name: Setup SSH
+    - name: Install sshpass
+      run: sudo apt-get install -y sshpass
+    
+    - name: Create and execute deployment script
       env:
-        SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_KEY }}
         VM_HOST: ${{ secrets.VM_HOST }}
         VM_USER: ${{ secrets.VM_USER }}
+        VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
       run: |
         # 设置SSH密钥
         mkdir -p ~/.ssh
@@ -182,134 +153,20 @@ jobs:
         echo "✅ 拉取${{ env.SHORT_SHA }}镜像成功"
         echo ""
         
-        # 3. 进入项目目录
-        echo "步骤3: 准备部署环境"
-        cd /opt/web-calculator
-        
-        # 备份当前配置文件
-        if [ -f docker-compose.yml ]; then
-          cp docker-compose.yml docker-compose.yml.backup.$(date +%s)
-        fi
-        echo ""
-        
-        # 4. 更新docker-compose.yml文件
-        echo "步骤4: 更新配置文件"
-        cat > docker-compose.yml << 'COMPOSE_EOF'
-        version: '3.8'
-        
-        services:
-          
-          app_blue:
-            image: ghcr.io/${{ github.repository }}:${{ env.SHORT_SHA }}
-            container_name: webcalc_blue
-            restart: unless-stopped
-            ports:
-              - "${{ env.BLUE_PORT }}:5000"
-            environment:
-              - FLASK_ENV=production
-              - FLASK_RUN_HOST=0.0.0.0
-              - FLASK_RUN_PORT=5000
-              - CONTAINER_COLOR=blue
-              - DEPLOYMENT_SHA=${{ env.SHORT_SHA }}
-            networks:
-              - webcalc-network
-            healthcheck:
-              test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-              interval: 10s
-              timeout: 5s
-              retries: 3
-              start_period: 20s
-            
-          app_green:
-            image: ghcr.io/${{ github.repository }}:latest
-            container_name: webcalc_green
-            restart: unless-stopped
-            ports:
-              - "${{ env.GREEN_PORT }}:5000"
-            environment:
-              - FLASK_ENV=production
-              - FLASK_RUN_HOST=0.0.0.0
-              - FLASK_RUN_PORT=5000
-              - CONTAINER_COLOR=green
-            networks:
-              - webcalc-network
-            healthcheck:
-              test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-              interval: 10s
-              timeout: 5s
-              retries: 3
-              start_period: 20s
-        
-          proxy:
-            image: nginx:1.25-alpine
-            container_name: webcalc_proxy
-            restart: unless-stopped
-            ports:
-              - "80:80"
-            volumes:
-              - ./nginx/conf.d:/etc/nginx/conf.d:ro
-            depends_on:
-              - app_blue
-              - app_green
-            networks:
-              - webcalc-network
-        
-        networks:
-          webcalc-network:
-            driver: bridge
-        COMPOSE_EOF
-        
-        echo "✅ docker-compose.yml 已更新"
-        echo ""
-        
-        # 5. 更新nginx配置
-        echo "步骤5: 更新nginx配置"
-        mkdir -p nginx/conf.d
-        cat > nginx/conf.d/app.conf << 'NGINX_EOF'
-        upstream flask_backend {
-            server webcalc_blue:5000;
-            server webcalc_green:5000;
-            least_conn;
-        }
-        
-        server {
-            listen 80;
-            server_name _;
-            
-            location / {
-                proxy_pass http://flask_backend;
-                proxy_set_header Host $host;
-                proxy_set_header X-Real-IP $remote_addr;
-                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                proxy_set_header X-Forwarded-Proto $scheme;
-                proxy_connect_timeout 5s;
-                proxy_read_timeout 60s;
-            }
-            
-            location /health {
-                proxy_pass http://flask_backend/health;
-                access_log off;
-            }
-        }
-        NGINX_EOF
-        
-        echo "✅ nginx配置已更新"
-        echo ""
-        
-        # 6. 停止旧服务
-        echo "步骤6: 停止旧服务"
+        # 3. 停止旧服务
+        echo "步骤3: 停止旧服务"
         docker-compose down 2>/dev/null || true
         echo "✅ 旧服务已停止"
         echo ""
         
-        # 7. 启动新服务
-        echo "步骤7: 启动蓝绿部署"
+        # 4. 启动新服务
+        echo "步骤4: 启动蓝绿部署"
         docker-compose up -d --force-recreate
         echo "✅ 服务启动命令已执行"
         echo ""
         
-        # 8. 等待服务启动
-        echo "步骤8: 等待服务启动"
+        # 5. 等待服务启动
+        echo "步骤5: 等待服务启动"
         for i in {1..30}; do
           BLUE_UP=$(docker ps | grep -c "webcalc_blue" || true)
           GREEN_UP=$(docker ps | grep -c "webcalc_green" || true)
@@ -328,8 +185,8 @@ jobs:
         done
         echo ""
         
-        # 9. 验证部署
-        echo "步骤9: 验证部署"
+        # 6. 验证部署
+        echo "步骤6: 验证部署"
         echo "当前容器状态:"
         docker-compose ps || docker ps --filter "name=webcalc" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
         echo ""
@@ -368,8 +225,8 @@ jobs:
         done
         echo ""
         
-        # 10. 生成部署报告
-        echo "步骤10: 生成部署报告"
+        # 7. 生成部署报告
+        echo "步骤7: 生成部署报告"
         IP=$(hostname -I | awk '{print $1}')
         echo "========================================"
         echo "           部署完成报告"
