@@ -5,44 +5,61 @@ services:
   app_blue:
     image: ghcr.io/in-ch369/web-calculator:sha-1d08513
     container_name: webcalc_blue
-    restart: always
+    restart: unless-stopped
     ports:
       - "5001:5000"
     environment:
       - FLASK_ENV=production
       - FLASK_RUN_HOST=0.0.0.0
       - FLASK_RUN_PORT=5000
+      - FLASK_DEBUG=0
+      - CONTAINER_NAME=blue-instance
+      - CONTAINER_ROLE=blue
     networks:
       - webcalc-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:5000/health && echo 'BLUE_OK'"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 20s
+    labels:
+      - "deployment.type=blue-green"
+      - "container.color=blue"
+      - "container.version=sha-1d08513"
     
   app_green:
     image: ghcr.io/in-ch369/web-calculator:latest
     container_name: webcalc_green
-    restart: always
+    restart: unless-stopped
     ports:
       - "5002:5000"
     environment:
       - FLASK_ENV=production
       - FLASK_RUN_HOST=0.0.0.0
       - FLASK_RUN_PORT=5000
+      - FLASK_DEBUG=0
+      - CONTAINER_NAME=green-instance
+      - CONTAINER_ROLE=green
     networks:
       - webcalc-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:5000/health && echo 'GREEN_OK'"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 20s
+    labels:
+      - "deployment.type=blue-green"
+      - "container.color=green"
+      - "container.version=latest"
 
   proxy:
     image: nginx:1.25-alpine
     container_name: webcalc_proxy
+    restart: unless-stopped
     ports:
-      - "8080:80"
+      - "80:80"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
     depends_on:
